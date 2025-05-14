@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>互動展示</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: black; /* Fallback background */
+        }
+
+        #container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            cursor: default; /* Will be set to pointer when ready */
+        }
+
+        /* Shared styles for all full-screen elements */
+        #backgroundImage, #backgroundVideo, #mainVideo {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: none; /* Hide all initially, JS will show the correct one */
+        }
+
+        #clickPrompt {
+            position: absolute;
+            bottom: 5%;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 18px;
+            padding: 8px 15px;
+            background-color: rgba(0, 8, 254, 0.5);
+            border-radius: 5px;
+            z-index: 5;
+            display: none;
+            text-align: center;
+        }
+
+        #closeButton {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 30px;
+            height: 30px;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            border: 1px solid white;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 100;
+            font-size: 20px;
+            line-height: 28px;
+            text-align: center;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="container">
+        <!-- Choose ONE background: provide src for either img OR video -->
+        <img id="backgroundImage" src="https://ecom.g2000.com.hk/ecom/Web%20View%20IMG%20Video%20Player/Background.jpg" alt="背景圖片">
+        <video id="backgroundVideo" src="https://ecom.g2000.com.hk/ecom/Web%20View%20IMG%20Video%20Player/backgroundvideo.mp4" preload="auto" autoplay muted loop playsinline>
+             <!-- Provide BG video src here if using video BG -->
+            您的瀏覽器不支援 HTML5 影片。
+        </video>
+
+        <!-- Main interactive video -->
+        <video id="mainVideo" src="https://ecom.g2000.com.hk/ecom/Web%20View%20IMG%20Video%20Player/Video.mp4" preload="auto" playsinline muted>
+            您的瀏覽器不支援 HTML5 影片。
+        </video>
+
+        <div id="clickPrompt">点击画面 • 展示更多</div>
+    </div>
+    <button id="closeButton" aria-label="關閉">×</button>
+
+    <script>
+        const container = document.getElementById('container');
+        const bgImage = document.getElementById('backgroundImage');
+        const bgVideo = document.getElementById('backgroundVideo'); // New background video element
+        const mainVideo = document.getElementById('mainVideo');
+        const closeButton = document.getElementById('closeButton');
+        const clickPrompt = document.getElementById('clickPrompt');
+
+        // --- Configuration ---
+        // Determine background type by checking which element has a src
+        const useVideoBackground = !!(bgVideo && bgVideo.getAttribute('src'));
+        const useImageBackground = !useVideoBackground && !!(bgImage && bgImage.getAttribute('src'));
+        // --- End Configuration ---
+
+        let isVideoPlaying = false; // Tracks if the MAIN video is playing
+        let userInteractedOnce = false;
+        let resourcesReady = false;
+        let interactionDisabled = false;
+
+        let backgroundResourceLoaded = false;
+        let mainVideoMetaLoaded = false;
+
+        // --- Fullscreen Functions (unchanged) ---
+        function goFullScreen() {
+             if (document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement) {
+                console.log("Already in fullscreen or request pending.");
+                return Promise.resolve();
+            }
+            const elem = document.documentElement;
+            let fullscreenPromise;
+            if (elem.requestFullscreen) {
+                fullscreenPromise = elem.requestFullscreen();
+            } else if (elem.webkitRequestFullscreen) {
+                fullscreenPromise = elem.webkitRequestFullscreen();
+            } else if (elem.msRequestFullscreen) {
+                fullscreenPromise = elem.msRequestFullscreen();
+            } else {
+                console.log("Fullscreen API not supported.");
+                return Promise.reject(new Error("Fullscreen API not supported."));
+            }
+            return fullscreenPromise.catch(err => {
+                console.warn("Fullscreen request failed:", err.message);
+            });
+        }
+
+        function exitFullScreen() {
+            if (!document.fullscreenElement && !document.webkitFullscreenElement && !document.msFullscreenElement) {
+                console.log("Not in fullscreen mode.");
+                return Promise.resolve();
+            }
+            let exitPromise;
+            if (document.exitFullscreen) {
+                exitPromise = document.exitFullscreen();
+            } else if (document.webkitExitFullscreen) {
+                exitPromise = document.webkitExitFullscreen();
+            } else if (document.msExitFullscreen) {
+                exitPromise = document.msExitFullscreen();
+            } else {
+                console.log("Exit Fullscreen API not supported.");
+                return Promise.reject(new Error("Exit Fullscreen API not supported."));
+            }
+            return exitPromise.catch(err => {
+                 console.warn("Exit fullscreen error:", err.message);
+            });
+        }
+        // --- End Fullscreen Functions ---
+
+
+        function checkResources() {
+            // Now check if the active background AND the main video are ready
+            if (backgroundResourceLoaded && mainVideoMetaLoaded) {
+                if (resourcesReady) return; // Already processed
+                resourcesReady = true;
+                console.log("All essential resources ready for interaction.");
+                if (!isVideoPlaying && !interactionDisabled) {
+                    showBackgroundState(); // Call the updated state function
+                }
+            }
+        }
+
+        // Updated function to show either image or video background
+        function showBackgroundState() {
+            // Stop and hide main video
+            mainVideo.pause();
+            mainVideo.currentTime = 0;
+            mainVideo.style.display = 'none';
+            closeButton.style.display = 'none';
+
+            // Show the correct background
+            if (useVideoBackground) {
+                bgImage.style.display = 'none'; // Hide image if using video bg
+                bgVideo.style.display = 'block';
+                // Ensure background video plays (might need a nudge after interaction)
+                bgVideo.play().catch(e => console.warn("BG video autoplay might need interaction", e));
+            } else if (useImageBackground) {
+                bgVideo.style.display = 'none'; // Hide video if using image bg
+                bgImage.style.display = 'block';
+            } else {
+                // No background defined, maybe show a solid color or error
+                bgImage.style.display = 'none';
+                bgVideo.style.display = 'none';
+                console.error("No background source (image or video) defined!");
+            }
+
+            isVideoPlaying = false; // Main video is not playing
+            console.log(`Switched to Background (${useVideoBackground ? 'Video' : 'Image'}). Interaction disabled: ${interactionDisabled}`);
+
+            // Manage prompt and cursor based on readiness and interaction state
+            if (interactionDisabled) {
+                clickPrompt.style.display = 'none';
+                container.style.cursor = 'default';
+            } else if (resourcesReady) {
+                clickPrompt.style.display = 'block';
+                container.style.cursor = 'pointer';
+            } else {
+                clickPrompt.style.display = 'none';
+                container.style.cursor = 'default';
+            }
+        }
+
+        // Updated function to play the MAIN video
+        function playMainVideo() { // Renamed for clarity
+            if (interactionDisabled || isVideoPlaying || !resourcesReady) {
+                 console.log(`Play main video skipped: interactionDisabled=${interactionDisabled}, isVideoPlaying=${isVideoPlaying}, resourcesReady=${resourcesReady}`);
+                return;
+            }
+
+            clickPrompt.style.display = 'none'; // Hide prompt
+
+            // Hide BOTH background elements
+            bgImage.style.display = 'none';
+            bgVideo.style.display = 'none';
+            if (useVideoBackground) {
+                bgVideo.pause(); // Pause background video to save resources
+            }
+
+            // Show and play main video
+            mainVideo.style.display = 'block';
+            mainVideo.muted = false; // Unmute the main video
+            closeButton.style.display = 'block';
+
+            mainVideo.play()
+                .then(() => {
+                    console.log("Main video playback started.");
+                    isVideoPlaying = true;
+                })
+                .catch(error => {
+                    console.error("主影片播放失敗:", error);
+                    closeButton.style.display = 'none';
+                    showBackgroundState(); // Revert to background state on error
+                });
+        }
+
+        // --- Resource Loading Event Listeners ---
+        if (useImageBackground) {
+            bgImage.onload = () => { backgroundResourceLoaded = true; console.log("BG Img loaded."); checkResources(); };
+            bgImage.onerror = () => { backgroundResourceLoaded = true; console.error("BG Img error."); checkResources(); }; // Treat error as loaded to proceed
+        } else if (useVideoBackground) {
+            bgVideo.onloadedmetadata = () => { backgroundResourceLoaded = true; console.log("BG Vid meta loaded."); checkResources(); };
+            bgVideo.oncanplay = () => { backgroundResourceLoaded = true; console.log("BG Vid can play."); checkResources(); }; // Added for robustness
+            bgVideo.onerror = (e) => { backgroundResourceLoaded = true; console.error("BG Vid load error.", e); checkResources(); }; // Treat error as loaded
+        } else {
+             // No background? Mark as loaded immediately so main video can proceed if available
+             backgroundResourceLoaded = true;
+             console.warn("No background defined, proceeding without it.");
+        }
+
+        // Main video listeners (unchanged, but ensure they check 'mainVideoMetaLoaded')
+        mainVideo.onloadedmetadata = () => { mainVideoMetaLoaded = true; console.log("Main Vid meta loaded."); checkResources(); };
+        mainVideo.oncanplay = () => { mainVideoMetaLoaded = true; console.log("Main Vid can play."); checkResources(); };
+        mainVideo.onerror = (e) => {
+            // Only treat as 'ready' if it's a loading error before playing
+            if (!isVideoPlaying && !mainVideoMetaLoaded) {
+                 mainVideoMetaLoaded = true; console.error("Main Vid load error.", e); checkResources();
+            } else if (isVideoPlaying) {
+                // Handle playback errors separately
+                console.error("主影片播放期間發生錯誤:", e);
+                showBackgroundState();
+            }
+        };
+        // --- End Resource Loading ---
+
+
+        // --- Event Listeners (Mostly Unchanged Logic, Call Correct Functions) ---
+        container.addEventListener('click', async function() {
+            if (interactionDisabled || !resourcesReady) {
+                console.log(`Container click ignored: disabled=${interactionDisabled}, resourcesReady=${resourcesReady}`);
+                return;
+            }
+
+            if (!userInteractedOnce) {
+                try {
+                    await goFullScreen();
+                    console.log("Fullscreen attempt finished.");
+                } catch (fullscreenError) {
+                    console.warn("Fullscreen was not successful but proceeding.", fullscreenError);
+                }
+
+                // Unlock main video context (play/pause)
+                const unlockPromise = mainVideo.play();
+                 unlockPromise.then(() => {
+                    mainVideo.pause(); mainVideo.currentTime = 0;
+                    console.log("Main video context unlocked.");
+                    // Try playing the main video immediately after unlock
+                    if (!isVideoPlaying) playMainVideo();
+                }).catch(error => {
+                    console.warn("Main video context unlock failed:", error);
+                    // Still try to play the main video even if unlock fails
+                    if (!isVideoPlaying) playMainVideo();
+                });
+                userInteractedOnce = true;
+
+                 // Also attempt to play/pause background video if needed for unlock on some devices
+                 if (useVideoBackground) {
+                     bgVideo.play().then(() => bgVideo.pause()).catch(()=>{});
+                 }
+
+            } else {
+                // Subsequent clicks play the main video if not already playing
+                if (!isVideoPlaying) {
+                    playMainVideo();
+                }
+            }
+        });
+
+        mainVideo.addEventListener('ended', function() {
+            console.log("Main video ended.");
+            if (!interactionDisabled) {
+                showBackgroundState(); // Show background when main video finishes
+            }
+        });
+
+        // mainVideo 'error' during playback is handled within its onerror listener now
+
+        closeButton.addEventListener('click', async function(event) {
+            event.stopPropagation();
+            console.log("Close button clicked.");
+            interactionDisabled = true; // Disable future interactions
+
+            try {
+                await exitFullScreen();
+                console.log("Exited fullscreen successfully or was not in fullscreen.");
+            } catch (exitError) {
+                console.warn("Could not exit fullscreen:", exitError);
+            }
+            showBackgroundState(); // Revert to background state
+        });
+
+        window.addEventListener('load', () => {
+            console.log("Window loaded. Initial setup.");
+            // Elements are hidden by default via CSS
+            // Resource checks will trigger showBackgroundState when ready.
+            container.style.cursor = 'default'; // Not clickable until resources are ready
+        });
+
+        window.addEventListener('contextmenu', e => e.preventDefault());
+        // --- End Event Listeners ---
+
+    </script>
+
+</body>
+</html>
